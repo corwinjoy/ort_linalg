@@ -1,4 +1,4 @@
-# Custom operator from PyTorch
+# Map additional operators from PyTorch to ONNX Runtime
 
 # Adapted from https://github.com/microsoft/onnxruntime-inference-examples/blob/main/python/api/onnxruntime-python-api.py
 # Added python custom operator as per: https://github.com/microsoft/onnxruntime-extensions/blob/main/docs/pyop.md
@@ -18,6 +18,8 @@ CUSTOM_OP_VERSION = 9  # Not sure what opset version to use, or if it matters
 
 # Register custom onnx-runtime implementations in python
 # This will be registered to the domain ai.onnx.contrib
+
+
 @ortx.onnx_op(op_type="linalg_cholesky", inputs=[ortx.PyCustomOpDef.dt_double],
               outputs=[ortx.PyCustomOpDef.dt_double])
 def linalg_cholesky(x):
@@ -49,24 +51,6 @@ def numpy_transpose(x):
     return np.transpose(x, axes=(-2, -1))
 
 
-rem = """
-Tensor diag_embed(const Tensor& self, int64_t offset, int64_t dim1_, int64_t dim2_) {
-  int64_t nDims = self.dim() + 1;
-  int64_t dim1 = maybe_wrap_dim(dim1_, nDims);
-  int64_t dim2 = maybe_wrap_dim(dim2_, nDims);
-  TORCH_CHECK(dim1 != dim2, "diagonal dimensions cannot be identical ", dim1_, ", ", dim2_);
-  int64_t new_dim_len = std::abs(offset) + self.size(-1);
-  auto sizes = self.sizes().vec();
-  sizes.pop_back();
-  sizes.insert(sizes.begin() + std::min(dim1, dim2), new_dim_len);
-  sizes.insert(sizes.begin() + std::max(dim1, dim2), new_dim_len);
-  auto result = at::zeros(sizes, self.options());
-  auto diag = result.diagonal(offset, dim1, dim2);
-  diag.copy_(self);
-  return result;
-}
-"""
-
 @ortx.onnx_op(op_type="numpy_diag_embed",
               inputs=[ortx.PyCustomOpDef.dt_float,
                       ortx.PyCustomOpDef.dt_int64,
@@ -74,6 +58,9 @@ Tensor diag_embed(const Tensor& self, int64_t offset, int64_t dim1_, int64_t dim
                       ortx.PyCustomOpDef.dt_int64],
               outputs=[ortx.PyCustomOpDef.dt_float])
 def numpy_diag_embed(x, offset=0, dim1=- 2, dim2=- 1):
+    assert(offset == 0)
+    assert(dim1 == -2)
+    assert(dim2 == -1)
     if x.ndim > 1:
         new = np.zeros_like(x)
         np.fill_diagonal(new, x.diagonal())
@@ -84,12 +71,15 @@ def numpy_diag_embed(x, offset=0, dim1=- 2, dim2=- 1):
     return new
 
 
-# Register the bindings from pytorch aten functions to implementations in onnx-runtime
+# Register the runtime bindings from pytorch aten functions to @onnx_op functions above
 def register_custom_ops():
     def bind_custom_op_cholesky(g, x, upper):
         return g.op("ai.onnx.contrib::linalg_cholesky", x)
 
-    def bind_custom_op_cholesky_ex(g, x, upper, check_errors):
+    def bind_custom_op_cholesky_ex(g, x, upper, check_errors, out):
+        assert(upper is False)
+        assert(check_errors is False)
+        assert(out is None)
         return g.op("ai.onnx.contrib::linalg_cholesky_ex", x)
 
     def bind_custom_op_solve_triangular(g, a, b, upper, left, unittriangular):
@@ -118,11 +108,11 @@ def register_custom_ops():
 
     register_custom_op_symbolic(symbolic_name='aten::mT',
                                 symbolic_fn=bind_custom_op_mT,
-                                opset_version=1)
+                                opset_version=CUSTOM_OP_VERSION)
 
     register_custom_op_symbolic(symbolic_name='aten::diag_embed',
                                 symbolic_fn=bind_custom_op_diag_embed,
-                                opset_version=1)
+                                opset_version=CUSTOM_OP_VERSION)
 
 
 # Create an ONNX Runtime session with the provided model and custom ops library
